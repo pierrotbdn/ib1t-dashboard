@@ -302,7 +302,7 @@ function render(state, isDemo){
       <div class="btc-logo">₿</div>
       <div>
         <h1>DCA ETF Bitcoin</h1>
-        <div class="sub">${lc.date ? `${marketStatusNow().open ? 'Dernier prix vérifié' : 'Prix de clôture'} — ${lc.date} ${lc.time||''}` : 'Aucune vérification enregistrée'}</div>
+        <div class="sub">${lc.date ? `${(lc.marketOpen ?? marketStatusNow().open) ? 'Prix en direct (séance)' : 'Dernier prix disponible (hors séance)'} — ${lc.date} ${lc.time||''}` : 'Aucune vérification enregistrée'}</div>
       </div>
     </div>
 
@@ -399,12 +399,8 @@ function render(state, isDemo){
     }
     const btn=document.getElementById('checkBtn');
     const status = marketStatusNow();
-    if(!status.open){
-      msg.className='msg err';
-      msg.textContent = `Marché fermé — ${status.reason}. Prochaine vérification automatique : séance suivante, 9h00–17h30 (lundi-vendredi).`;
-      return;
-    }
-    btn.disabled=true; btn.textContent='Vérification en cours…'; msg.textContent='';
+    btn.disabled=true; btn.textContent='Vérification en cours…';
+    msg.className='msg'; msg.textContent = status.open ? '' : `Marché fermé (${status.reason}) — le prix et le signal restent calculés normalement.`;
     try{
       await ghTriggerWorkflow();
       const before = lc.date+(lc.time||'');
