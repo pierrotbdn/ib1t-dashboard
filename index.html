@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="IB1T DCA">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>IB1T DCA</title>
 <style>
   :root{
@@ -147,8 +146,30 @@ const ZONES = [
 ];
 const OBJECTIVE = 10000;
 const WORKFLOW_FILE = 'ib1t-dca.yml';
+const HOLIDAYS_2026 = ['2026-01-01','2026-04-03','2026-04-06','2026-05-01','2026-12-25'];
+const EARLY_CLOSE_2026 = {'2026-12-24':[14,0], '2026-12-31':[14,0]};
 let CFG = null;
 let DEMO_STATE = null;
+
+function parisNowParts(){
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone:'Europe/Paris', year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', hour12:false, weekday:'short'
+  });
+  const parts = {};
+  fmt.formatToParts(new Date()).forEach(p => parts[p.type] = p.value);
+  return parts;
+}
+function marketStatusNow(){
+  const p = parisNowParts();
+  const d = `${p.year}-${p.month}-${p.day}`;
+  const mins = parseInt(p.hour)*60 + parseInt(p.minute);
+  if(HOLIDAYS_2026.includes(d)) return {open:false, reason:"jour férié Euronext"};
+  if(!['Mon','Tue','Wed','Thu','Fri'].includes(p.weekday)) return {open:false, reason:"week-end"};
+  const close = EARLY_CLOSE_2026[d] ? EARLY_CLOSE_2026[d][0]*60+EARLY_CLOSE_2026[d][1] : 17*60+30;
+  if(mins < 9*60 || mins > close) return {open:false, reason:`hors séance (9h00–${String(Math.floor(close/60)).padStart(2,'0')}h${String(close%60).padStart(2,'0')})`};
+  return {open:true};
+}
 
 function todayStr(){
   return new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
@@ -281,7 +302,7 @@ function render(state, isDemo){
       <div class="btc-logo">₿</div>
       <div>
         <h1>DCA ETF Bitcoin</h1>
-        <div class="sub">${lc.date ? `Dernier prix vérifié — ${lc.date} ${lc.time||''}` : 'Aucune vérification enregistrée'}</div>
+        <div class="sub">${lc.date ? `${marketStatusNow().open ? 'Dernier prix vérifié' : 'Prix de clôture'} — ${lc.date} ${lc.time||''}` : 'Aucune vérification enregistrée'}</div>
       </div>
     </div>
 
@@ -377,18 +398,32 @@ function render(state, isDemo){
       return;
     }
     const btn=document.getElementById('checkBtn');
+    const status = marketStatusNow();
+    if(!status.open){
+      msg.className='msg err';
+      msg.textContent = `Marché fermé — ${status.reason}. Prochaine vérification automatique : séance suivante, 9h00–17h30 (lundi-vendredi).`;
+      return;
+    }
     btn.disabled=true; btn.textContent='Vérification en cours…'; msg.textContent='';
     try{
       await ghTriggerWorkflow();
       const before = lc.date+(lc.time||'');
       let found=false;
-      for(let i=0;i<10;i++){
-        await new Promise(r=>setTimeout(r,4000));
-        const {state:freshState} = await ghGetFile();
-        const freshLc = freshState.lastChecked||{};
-        if((freshLc.date+(freshLc.time||'')) !== before){ found=true; render(freshState,false); break; }
+      const maxTries = 20; // ~100s, laisse le temps à la file d'attente + install + run
+      for(let i=0;i<maxTries;i++){
+        await new Promise(r=>setTimeout(r,5000));
+        btn.textContent = `Vérification en cours… (${(i+1)*5}s)`;
+        try{
+          const {state:freshState} = await ghGetFile();
+          const freshLc = freshState.lastChecked||{};
+          if((freshLc.date+(freshLc.time||'')) !== before){ found=true; render(freshState,false); break; }
+        }catch(inner){ /* ignore un raté ponctuel de lecture, on continue à réessayer */ }
       }
-      if(!found){ msg.className='msg err'; msg.textContent="Toujours en cours côté GitHub — réessaie de rafraîchir dans une minute."; btn.disabled=false; btn.textContent='Vérifier maintenant'; }
+      if(!found){
+        msg.className='msg err';
+        msg.textContent="GitHub prend plus de temps que prévu (file d'attente Actions). Réessaie \u00abrafraîchir\u00bb en bas dans 1-2 minutes — la vérification a probablement quand même eu lieu.";
+        btn.disabled=false; btn.textContent='Vérifier maintenant';
+      }
     }catch(e){
       msg.className='msg err'; msg.textContent=e.message; btn.disabled=false; btn.textContent='Vérifier maintenant';
     }
